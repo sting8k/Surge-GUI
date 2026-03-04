@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Surge",
+  "outputfilename": "Surge",
+  "frontend:build": "npm run build",
+  "frontend:dev:serverUrl": "auto",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:install": "npm install",
+  "author": {
+    "name": "Surge",
+    "email": "prawps@gmail.com"
+  },
+  "info": {
+    "companyName": "Surge",
+    "productName": "Surge",
+    "productVersion": "0.1.0",
+    "copyright": "© 2026 Surge",
+    "comments": "Blazing fast download manager"
+  }
+}
