@@ -20,6 +20,8 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+var version = "dev"
+
 const (
 	surgeBaseURL = "http://127.0.0.1:1700"
 
@@ -335,6 +337,10 @@ func (a *App) GetIconMode() string {
 		a.loadIconMode()
 	}
 	return a.iconMode
+}
+
+func (a *App) GetVersion() string {
+	return version
 }
 
 func (a *App) SetIconMode(mode string) error {

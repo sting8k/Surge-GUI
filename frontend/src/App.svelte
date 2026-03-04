@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { ListDownloads, AddURL, AddDownload, PauseDownload, ResumeDownload, DeleteDownload, IsServerRunning, OpenDirectoryDialog, GetStartupEnabled, SetStartupEnabled, GetIconMode, SetIconMode } from '../wailsjs/go/main/App';
+  import { ListDownloads, AddURL, AddDownload, PauseDownload, ResumeDownload, DeleteDownload, IsServerRunning, OpenDirectoryDialog, GetStartupEnabled, SetStartupEnabled, GetIconMode, SetIconMode, GetVersion } from '../wailsjs/go/main/App';
   import { EventsOn } from '../wailsjs/runtime/runtime';
   import type { main } from '../wailsjs/go/models';
 
@@ -15,6 +15,7 @@
   let startupBusy = false;
   let iconMode: 'dock' | 'menu_bar' = 'dock';
   let iconModeBusy = false;
+  let appVersion = 'dev';
 
   // Modal
   let showAddModal = false;
@@ -40,6 +41,7 @@
       refreshList()
     ]);
     serverConnected = connected;
+    try { appVersion = await GetVersion(); } catch {}
 
     pollInterval = setInterval(async () => {
       const [connectedNow] = await Promise.all([
@@ -530,7 +532,7 @@
         startup {startupBusy ? '...' : (launchAtLogin ? 'on' : 'off')}
       </button>
       <span>{downloads.length} items</span>
-      <span class="version">v0.1.0</span>
+      <span class="version">v{appVersion}</span>
     </div>
   </div>
 </div>

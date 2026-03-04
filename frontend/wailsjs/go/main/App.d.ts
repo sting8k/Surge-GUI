@@ -17,6 +17,8 @@ export function GetIconMode():Promise<string>;
 
 export function GetStartupEnabled():Promise<boolean>;
 
+export function GetVersion():Promise<string>;
+
 export function IsServerRunning():Promise<boolean>;
 
 export function ListDownloads():Promise<Array<main.DownloadItem>>;

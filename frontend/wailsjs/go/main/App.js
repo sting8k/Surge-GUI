@@ -30,6 +30,10 @@ export function GetStartupEnabled() {
   return window['go']['main']['App']['GetStartupEnabled']();
 }
 
+export function GetVersion() {
+  return window['go']['main']['App']['GetVersion']();
+}
+
 export function IsServerRunning() {
   return window['go']['main']['App']['IsServerRunning']();
 }
