@@ -22,7 +22,7 @@ A fast, minimal download manager built with [Wails](https://wails.io/) + Svelte 
 - [Go 1.21+](https://go.dev/)
 - [Node.js 18+](https://nodejs.org/)
 - [Wails CLI v2](https://wails.io/docs/gettingstarted/installation)
-- [Surge CLI](https://github.com/nicholasgasior/surge) running as backend server
+- [Surge CLI](https://github.com/surge-downloader/surge) running as backend server
 
 ### Development
 
