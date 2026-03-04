@@ -4,6 +4,8 @@ A fast, minimal download manager built with [Wails](https://wails.io/) + Svelte 
 
 ![macOS](https://img.shields.io/badge/macOS-supported-brightgreen)
 
+![Surge Screenshot](build/screenshot.png)
+
 ## Features
 
 - **Download management** — add URLs, pause, resume, delete downloads
