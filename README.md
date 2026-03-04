@@ -1,16 +1,70 @@
-# README
+# Surge Desktop
 
-## About
+A fast, minimal download manager built with [Wails](https://wails.io/) + Svelte + Go.
 
-This is the official Wails Svelte-TS template.
+![macOS](https://img.shields.io/badge/macOS-supported-brightgreen)
 
-## Live Development
+## Features
 
-To run in live development mode, run `wails dev` in the project directory. This will run a Vite development
-server that will provide very fast hot reload of your frontend changes. If you want to develop in a browser
-and have access to your Go methods, there is also a dev server that runs on http://localhost:34115. Connect
-to this in your browser, and you can call your Go code from devtools.
+- **Download management** — add URLs, pause, resume, delete downloads
+- **Real-time progress** — SSE event streaming with live speed & ETA
+- **Launch at Login** — toggle auto-start via macOS LaunchAgent
+- **Dock / Menu Bar mode** — choose where the app icon lives
+- **Single instance** — opening the app twice just focuses the existing window
+- **Dark UI** — obsidian-themed interface
 
-## Building
+## Quick Start
 
-To build a redistributable, production mode package, use `wails build`.
+### Prerequisites
+
+- [Go 1.21+](https://go.dev/)
+- [Node.js 18+](https://nodejs.org/)
+- [Wails CLI v2](https://wails.io/docs/gettingstarted/installation)
+- [Surge CLI](https://github.com/nicholasgasior/surge) running as backend server
+
+### Development
+
+```bash
+wails dev
+```
+
+Opens the app with hot-reload for frontend changes.
+
+### Build
+
+```bash
+wails build
+```
+
+Produces `build/bin/Surge.app` (macOS).
+
+## Project Structure
+
+```
+surge-wails/
+├── app.go                  # Backend: download API, SSE, autostart, icon mode
+├── main.go                 # Wails app entry point & config
+├── icon_mode_darwin.go     # macOS native: dock ↔ menu bar switching
+├── icon_mode_stub.go       # Non-macOS stub
+├── frontend/
+│   ├── src/
+│   │   ├── App.svelte      # Main UI component
+│   │   ├── style.css       # Global styles
+│   │   └── main.ts         # Svelte entry
+│   └── wailsjs/            # Auto-generated Go bindings
+├── build/
+│   ├── appicon.png         # App icon source
+│   └── darwin/             # macOS plist templates
+└── wails.json              # Wails project config
+```
+
+## Usage
+
+1. Start the Surge backend server (`surge server`)
+2. Launch the app — it auto-detects the running server
+3. Paste a URL in the top bar and hit Enter to download
+4. Use the footer toggles for **startup** and **dock/bar** mode
+
+## License
+
+MIT
