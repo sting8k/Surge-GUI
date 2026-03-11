@@ -25,6 +25,10 @@ export function ListDownloads():Promise<Array<main.DownloadItem>>;
 
 export function OpenDirectoryDialog():Promise<string>;
 
+export function OpenFile(arg1:string):Promise<void>;
+
+export function OpenInFinder(arg1:string):Promise<void>;
+
 export function PauseDownload(arg1:string):Promise<void>;
 
 export function ResumeDownload(arg1:string):Promise<void>;

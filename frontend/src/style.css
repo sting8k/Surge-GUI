@@ -461,7 +461,7 @@ html, body {
 }
 
 .mini-progress.downloading { background: linear-gradient(90deg, var(--prog-start), var(--prog-end)); }
-.mini-progress.completed { background: var(--st-completed); }
+.mini-progress.completed { background: var(--st-completed); opacity: 0; }
 .mini-progress.paused { background: var(--st-paused); }
 .mini-progress.error { background: var(--st-error); }
 
@@ -827,3 +827,55 @@ html, body {
 .toast.success { border-left: 2px solid var(--st-downloading); }
 .toast.error { border-left: 2px solid var(--st-error); }
 .toast.info { border-left: 2px solid var(--neon-cyan); }
+
+/* ── Context Menu ── */
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 160px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  animation: ctxIn 0.1s ease-out;
+}
+
+@keyframes ctxIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.ctx-item {
+  display: block;
+  width: 100%;
+  padding: 7px 14px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.ctx-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-bright);
+}
+
+.ctx-item.danger {
+  color: var(--st-error);
+}
+
+.ctx-item.danger:hover {
+  background: rgba(255, 85, 85, 0.12);
+}
+
+.ctx-sep {
+  height: 1px;
+  margin: 3px 8px;
+  background: var(--border);
+}

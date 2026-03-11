@@ -32,6 +32,7 @@ func main() {
 		},
 		BackgroundColour:  &options.RGBA{R: 6, G: 9, B: 12, A: 255}, // #06090c obsidian root
 		HideWindowOnClose: true,
+		EnableDefaultContextMenu: true,
 		OnStartup:         app.startup,
 		OnShutdown:        app.shutdown,
 		Mac: &mac.Options{

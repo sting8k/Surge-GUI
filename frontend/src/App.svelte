@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { ListDownloads, AddURL, AddDownload, PauseDownload, ResumeDownload, DeleteDownload, IsServerRunning, OpenDirectoryDialog, GetStartupEnabled, SetStartupEnabled, GetIconMode, SetIconMode, GetVersion } from '../wailsjs/go/main/App';
+  import { ListDownloads, AddURL, AddDownload, PauseDownload, ResumeDownload, DeleteDownload, IsServerRunning, OpenDirectoryDialog, GetStartupEnabled, SetStartupEnabled, GetIconMode, SetIconMode, GetVersion, OpenFile, OpenInFinder } from '../wailsjs/go/main/App';
   import { EventsOn } from '../wailsjs/runtime/runtime';
   import type { main } from '../wailsjs/go/models';
 
@@ -27,6 +27,49 @@
   let toasts: Array<{id: number; message: string; type: string}> = [];
   let toastId = 0;
 
+  // Context menu
+  let ctxMenu: { x: number; y: number; dl: main.DownloadItem } | null = null;
+
+  function openCtxMenu(e: MouseEvent, dl: main.DownloadItem) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctxMenu = { x: e.clientX, y: e.clientY, dl };
+  }
+
+  function closeCtxMenu() {
+    ctxMenu = null;
+  }
+
+  async function ctxOpen() {
+    if (!ctxMenu) return;
+    const path = ctxMenu.dl.dest_path;
+    closeCtxMenu();
+    if (!path) { toast('path unknown', 'error'); return; }
+    try { await OpenFile(path); } catch (e: any) { toast(`open failed: ${e}`, 'error'); }
+  }
+
+  async function ctxOpenInFinder() {
+    if (!ctxMenu) return;
+    const path = ctxMenu.dl.dest_path;
+    closeCtxMenu();
+    if (!path) { toast('path unknown', 'error'); return; }
+    try { await OpenInFinder(path); } catch (e: any) { toast(`reveal failed: ${e}`, 'error'); }
+  }
+
+  async function ctxCopyURL() {
+    if (!ctxMenu) return;
+    const url = ctxMenu.dl.url;
+    closeCtxMenu();
+    try { await navigator.clipboard.writeText(url); toast('url copied', 'info'); } catch { toast('copy failed', 'error'); }
+  }
+
+  async function ctxDelete() {
+    if (!ctxMenu) return;
+    const id = ctxMenu.dl.id;
+    closeCtxMenu();
+    await doDelete(id);
+  }
+
   // ── Lifecycle ──
   let pollInterval: ReturnType<typeof setInterval>;
   let cleanups: Array<() => void> = [];
@@ -34,6 +77,13 @@
   let refreshListTimer: ReturnType<typeof setTimeout> | null = null;
 
   onMount(async () => {
+    document.addEventListener('click', closeCtxMenu);
+    document.addEventListener('contextmenu', (e) => {
+      // Only allow contextmenu on dl-items (handled by openCtxMenu), block everywhere else
+      if (!(e.target as HTMLElement)?.closest('.dl-item')) {
+        e.preventDefault();
+      }
+    });
     const [connected] = await Promise.all([
       IsServerRunning(),
       refreshStartupState(),
@@ -71,6 +121,7 @@
   });
 
   onDestroy(() => {
+    document.removeEventListener('click', closeCtxMenu);
     if (pollInterval) clearInterval(pollInterval);
     if (refreshListTimer) clearTimeout(refreshListTimer);
     for (const handle of timeoutHandles) {
@@ -144,8 +195,10 @@
       urlInput = '';
       toast('queued', 'info');
       scheduleRefreshList(500);
-    } catch (e: any) { toast(`failed: ${e}`, 'error'); }
-  }
+    } catch (e: any) {
+      if (String(e).includes('409')) toast('already exists', 'info');
+      else toast(`failed: ${e}`, 'error');
+    }  }
 
   function onKey(e: KeyboardEvent) { if (e.key === 'Enter') quickAdd(); }
 
@@ -157,8 +210,10 @@
       modalURL = modalPath = modalFilename = '';
       toast('queued', 'info');
       scheduleRefreshList(500);
-    } catch (e: any) { toast(`failed: ${e}`, 'error'); }
-  }
+    } catch (e: any) {
+      if (String(e).includes('409')) toast('already exists', 'info');
+      else toast(`failed: ${e}`, 'error');
+    }  }
 
   async function browseDir() {
     try { const d = await OpenDirectoryDialog(); if (d) modalPath = d; } catch {}
@@ -339,6 +394,7 @@
               class="dl-item"
               class:selected={selectedId === dl.id}
               on:click={() => selectedId = dl.id}
+              on:contextmenu={(e) => openCtxMenu(e, dl)}
               on:keydown={() => {}}
               role="button"
               tabindex="0"
@@ -352,9 +408,13 @@
                   <span>{sz(dl.downloaded)}{#if dl.total_size > 0}/{sz(dl.total_size)}{/if}</span>
                 </div>
               </div>
-              <span class="spd">
-                {#if sk === 'downloading'}{spd(dl.speed)}{:else}—{/if}
-              </span>
+              {#if sk === "completed"}
+                <button class="btn-icon" on:click|stopPropagation={() => OpenInFinder(dl.dest_path)} title="Open in Finder"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+              {:else if sk === "downloading"}
+                <span class="spd">{spd(dl.speed)}</span>
+              {:else}
+                <span class="spd">—</span>
+              {/if}
               <div class="acts">
                 {#if sk === 'downloading'}
                   <button class="btn-icon" on:click|stopPropagation={() => doPause(dl.id)} title="Pause">⏸</button>
@@ -543,6 +603,23 @@
     <div class="toast {t.type}">{t.message}</div>
   {/each}
 </div>
+
+<!-- CONTEXT MENU -->
+{#if ctxMenu}
+  {@const sk = statusKey(ctxMenu.dl.status)}
+  <div class="ctx-menu" style="left:{ctxMenu.x}px;top:{ctxMenu.y}px">
+    {#if sk === 'completed'}
+      <button class="ctx-item" on:click={ctxOpen}>Open</button>
+      <button class="ctx-item" on:click={ctxOpenInFinder}>Open in Finder</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" on:click={ctxCopyURL}>Copy URL</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" on:click={ctxDelete}>Delete</button>
+    {:else}
+      <button class="ctx-item" on:click={ctxCopyURL}>Copy URL</button>
+    {/if}
+  </div>
+{/if}
 
 <!-- ADD MODAL -->
 {#if showAddModal}

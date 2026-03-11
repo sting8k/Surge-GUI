@@ -606,6 +606,22 @@ func (a *App) OpenDirectoryDialog() (string, error) {
 	})
 }
 
+// OpenFile opens a file with the default application.
+func (a *App) OpenFile(filePath string) error {
+	if filePath == "" {
+		return fmt.Errorf("empty file path")
+	}
+	return exec.Command("open", filePath).Start()
+}
+
+// OpenInFinder reveals a file in Finder.
+func (a *App) OpenInFinder(filePath string) error {
+	if filePath == "" {
+		return fmt.Errorf("empty file path")
+	}
+	return exec.Command("open", "-R", filePath).Start()
+}
+
 // IsServerRunning checks if the backend is alive
 func (a *App) IsServerRunning() bool {
 	return a.healthCheck()

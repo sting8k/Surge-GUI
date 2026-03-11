@@ -46,6 +46,14 @@ export function OpenDirectoryDialog() {
   return window['go']['main']['App']['OpenDirectoryDialog']();
 }
 
+export function OpenFile(arg1) {
+  return window['go']['main']['App']['OpenFile'](arg1);
+}
+
+export function OpenInFinder(arg1) {
+  return window['go']['main']['App']['OpenInFinder'](arg1);
+}
+
 export function PauseDownload(arg1) {
   return window['go']['main']['App']['PauseDownload'](arg1);
 }
