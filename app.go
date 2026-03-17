@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -27,7 +29,14 @@ const (
 
 	iconModeDock    = "dock"
 	iconModeMenuBar = "menu_bar"
+
+	duplicateDownloadErrorText = "Duplicate download"
+	downloadStatusCompleted    = "completed"
+	downloadStatusDone         = "done"
+	downloadStatusPaused       = "paused"
 )
+
+var filenameProbeClient = &http.Client{Timeout: 15 * time.Second}
 
 // App struct wraps the Surge engine via HTTP API
 type App struct {
@@ -525,21 +534,162 @@ func (a *App) ListDownloads() ([]DownloadItem, error) {
 }
 
 // AddDownload queues a new download
-func (a *App) AddDownload(url, path, filename string) (string, error) {
-	body := map[string]interface{}{
-		"url":      url,
-		"path":     path,
-		"filename": filename,
+func isValidDownloadFilename(filename string) bool {
+	trimmed := strings.TrimSpace(filename)
+	if trimmed == "" || trimmed == "." || trimmed == "_" {
+		return false
 	}
-	data, err := a.apiPost("/download", body)
+	return true
+}
+
+func resolveFilenameFromURL(downloadURL string) string {
+	parsed, err := url.Parse(downloadURL)
 	if err != nil {
-		return "", err
+		return ""
 	}
+	name := path.Base(parsed.Path)
+	if name == "." || name == "/" {
+		return ""
+	}
+	decoded, err := url.PathUnescape(name)
+	if err == nil {
+		name = decoded
+	}
+	if !isValidDownloadFilename(name) {
+		return ""
+	}
+	return name
+}
+
+func resolveFilenameFromHeader(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	if cd := strings.TrimSpace(resp.Header.Get("Content-Disposition")); cd != "" {
+		if _, params, err := mime.ParseMediaType(cd); err == nil {
+			if filename := strings.TrimSpace(params["filename*"]); filename != "" {
+				if idx := strings.Index(filename, "''"); idx >= 0 {
+					filename = filename[idx+2:]
+				}
+				if decoded, err := url.PathUnescape(filename); err == nil {
+					filename = decoded
+				}
+				if isValidDownloadFilename(filename) {
+					return filename
+				}
+			}
+			if filename := strings.TrimSpace(params["filename"]); isValidDownloadFilename(filename) {
+				return filename
+			}
+		}
+	}
+	if resp.Request != nil && resp.Request.URL != nil {
+		return resolveFilenameFromURL(resp.Request.URL.String())
+	}
+	return ""
+}
+
+func parseDownloadID(data []byte) (string, error) {
 	var result map[string]string
 	if err := json.Unmarshal(data, &result); err != nil {
 		return "", err
 	}
 	return result["id"], nil
+}
+
+func (a *App) resolveDownloadFilename(downloadURL string) string {
+	if filename := resolveFilenameFromURL(downloadURL); filename != "" {
+		return filename
+	}
+
+	resp, err := filenameProbeClient.Head(downloadURL)
+	if err == nil {
+		defer resp.Body.Close()
+		if filename := resolveFilenameFromHeader(resp); filename != "" {
+			return filename
+		}
+	}
+
+	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Range", "bytes=0-0")
+	resp, err = filenameProbeClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	return resolveFilenameFromHeader(resp)
+}
+
+func (a *App) AddDownload(downloadURL, destPath, filename string) (string, error) {
+	body := map[string]interface{}{
+		"url":  downloadURL,
+		"path": destPath,
+	}
+	trimmedFilename := strings.TrimSpace(filename)
+	if isValidDownloadFilename(trimmedFilename) {
+		body["filename"] = trimmedFilename
+	} else if resolvedFilename := a.resolveDownloadFilename(downloadURL); resolvedFilename != "" {
+		body["filename"] = resolvedFilename
+	}
+	data, err := a.apiPost("/download", body)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, duplicateDownloadErrorText) {
+			if resumedID, resumeErr := a.resumeDuplicate(downloadURL); resumeErr == nil {
+				return resumedID, nil
+			}
+			bypassURL := withDuplicateBypass(downloadURL)
+			if bypassURL != "" && bypassURL != downloadURL {
+				body["url"] = bypassURL
+				if retryData, retryErr := a.apiPost("/download", body); retryErr == nil {
+					return parseDownloadID(retryData)
+				}
+			}
+		}
+		return "", err
+	}
+	return parseDownloadID(data)
+}
+
+func withDuplicateBypass(downloadURL string) string {
+	u, err := url.Parse(downloadURL)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	if q.Get("_swts") != "" {
+		return ""
+	}
+	q.Set("_swts", fmt.Sprintf("%d", time.Now().UnixNano()))
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func (a *App) resumeDuplicate(downloadURL string) (string, error) {
+	items, err := a.ListDownloads()
+	if err != nil {
+		return "", err
+	}
+
+	for _, item := range items {
+		if item.URL != downloadURL {
+			continue
+		}
+		if item.Status == downloadStatusCompleted || item.Status == downloadStatusDone {
+			continue
+		}
+		if item.ID == "" {
+			continue
+		}
+		if item.Status == downloadStatusPaused {
+			_ = a.ResumeDownload(item.ID)
+		}
+		return item.ID, nil
+	}
+	return "", fmt.Errorf("duplicate download not found in active queue")
 }
 
 // AddURL is a simpler binding: just provide a URL
