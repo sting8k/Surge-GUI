@@ -1,40 +1,75 @@
-# Agent Instructions
+# Agent Operating Guide
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+This repository is in Harness v0 and contains an early-stage Surge Desktop app.
 
-## Quick Reference
+The current job of agents is to preserve and grow the collaboration harness while
+maturing the app deliberately. Do not scaffold unrelated source folders,
+platform shells, package scripts, CI, or tests unless a selected story explicitly
+needs them.
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
-bd sync               # Sync with git
-```
+## Source Of Truth
 
-## Landing the Plane (Session Completion)
+Read in this order:
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+1. `README.md` for project status.
+2. `docs/HARNESS.md` for the human-agent operating model.
+3. `docs/FEATURE_INTAKE.md` before turning any prompt into work.
+4. The user-provided spec or prompt, when one exists.
+5. `docs/product/` for current product contracts.
+6. `docs/ARCHITECTURE.md` before proposing implementation shape.
+7. `docs/stories/` for story packets and backlog.
+8. `docs/TEST_MATRIX.md` for proof status.
+9. `docs/decisions/` for why important choices were made.
 
-**MANDATORY WORKFLOW:**
+This harness does not use a project-specific `SPEC.md` as the living plan. Treat
+human direction as input material for product docs, story packets, architecture
+decisions, and validation expectations. Product docs, stories, tests, and
+decisions then become the living contract that agents should update as the system
+evolves.
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd sync
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+## Task Loop
 
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+For every task:
 
+1. Classify the request with `docs/FEATURE_INTAKE.md`.
+2. Identify whether the input is a new spec, spec slice, change request, new
+   initiative, maintenance request, or harness improvement.
+3. Locate the affected product docs and story files.
+4. Check `docs/TEST_MATRIX.md` for existing proof and gaps.
+5. Work only inside the selected lane: tiny, normal, or high-risk.
+6. Before finishing, ask:
+   - Did product truth change?
+   - Did validation expectations change?
+   - Did architecture rules change?
+   - Did we discover a repeated failure pattern?
+   - Did the next agent need a clearer instruction?
+7. Update routine harness files directly, or add a proposal to
+   `docs/HARNESS_BACKLOG.md` when the change is structural.
+
+## Harness Change Policy
+
+Agents may update directly:
+
+- Story status and evidence.
+- `docs/TEST_MATRIX.md` rows.
+- Links from story packets to product docs.
+- Validation notes and reports.
+- Small clarifications tied to the current task.
+
+Agents should ask for human confirmation before:
+
+- Changing architecture direction.
+- Removing validation requirements.
+- Changing the source-of-truth hierarchy.
+- Changing risk classification rules.
+- Replacing the feature workflow.
+
+## Done Definition
+
+A task is done only when:
+
+- The requested change is completed or the blocker is documented.
+- Relevant docs, stories, and test matrix entries remain current.
+- Validation commands were run when they exist.
+- Missing harness capabilities were added to `docs/HARNESS_BACKLOG.md`.
+- The final response says what changed and what was not attempted.

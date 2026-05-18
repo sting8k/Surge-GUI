@@ -3,11 +3,15 @@
 import {main} from '../models';
 import {json} from '../models';
 
-export function AddDownload(arg1:string,arg2:string,arg3:string):Promise<string>;
+export function AddDownload(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function AddURL(arg1:string):Promise<string>;
 
+export function ClearCompleted():Promise<main.BulkActionResult>;
+
 export function DeleteDownload(arg1:string):Promise<void>;
+
+export function GetBackendStatus():Promise<main.BackendStatus>;
 
 export function GetDownloadStatus(arg1:string):Promise<main.DownloadItem>;
 
@@ -29,10 +33,16 @@ export function OpenFile(arg1:string):Promise<void>;
 
 export function OpenInFinder(arg1:string):Promise<void>;
 
+export function PauseAll():Promise<main.BulkActionResult>;
+
 export function PauseDownload(arg1:string):Promise<void>;
+
+export function ResumeAll():Promise<main.BulkActionResult>;
 
 export function ResumeDownload(arg1:string):Promise<void>;
 
 export function SetIconMode(arg1:string):Promise<void>;
 
 export function SetStartupEnabled(arg1:boolean):Promise<void>;
+
+export function UpdateDownloadURL(arg1:string,arg2:string):Promise<void>;

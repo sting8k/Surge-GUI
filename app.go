@@ -22,7 +22,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-var version = "dev"
+var version = "0.3.0"
 
 const (
 	surgeBaseURL = "http://127.0.0.1:1700"
@@ -31,12 +31,17 @@ const (
 	iconModeMenuBar = "menu_bar"
 
 	duplicateDownloadErrorText = "Duplicate download"
+	downloadStatusQueued       = "queued"
+	downloadStatusDownloading  = "downloading"
 	downloadStatusCompleted    = "completed"
-	downloadStatusDone         = "done"
+	downloadStatusError        = "error"
 	downloadStatusPaused       = "paused"
 )
 
-var filenameProbeClient = &http.Client{Timeout: 15 * time.Second}
+var (
+	apiHTTPClient       = &http.Client{Timeout: 30 * time.Second}
+	filenameProbeClient = &http.Client{Timeout: 15 * time.Second}
+)
 
 // App struct wraps the Surge engine via HTTP API
 type App struct {
@@ -47,9 +52,11 @@ type App struct {
 	surgeProcess *exec.Cmd
 	sseCancel    context.CancelFunc
 
-	autostartApp *autostart.App
-	iconMode     string
-	shutdownOnce sync.Once
+	autostartApp    *autostart.App
+	iconMode        string
+	shutdownOnce    sync.Once
+	cliVersionOnce  sync.Once
+	cliVersionCache string
 }
 
 // NewApp creates a new App application struct
@@ -117,13 +124,18 @@ func (a *App) shutdown(ctx context.Context) {
 	})
 }
 
-func (a *App) onSecondInstanceLaunch() {
+func (a *App) revealWindow() {
 	if a.ctx == nil {
 		return
 	}
 	wailsRuntime.Show(a.ctx)
 	wailsRuntime.WindowUnminimise(a.ctx)
 	wailsRuntime.WindowShow(a.ctx)
+	revealMainWindow()
+}
+
+func (a *App) onSecondInstanceLaunch() {
+	a.revealWindow()
 }
 
 // --------------------------------------------------------------------------
@@ -360,6 +372,7 @@ func (a *App) SetIconMode(mode string) error {
 	if err := a.saveIconMode(next); err != nil {
 		return err
 	}
+	a.revealWindow()
 	a.iconMode = next
 	return nil
 }
@@ -391,7 +404,7 @@ func (a *App) apiRequest(method, path string, body interface{}) (*http.Response,
 		req.Header.Set("Authorization", "Bearer "+a.token)
 	}
 
-	return http.DefaultClient.Do(req)
+	return apiHTTPClient.Do(req)
 }
 
 func (a *App) apiReadBody(resp *http.Response) ([]byte, error) {
@@ -420,6 +433,14 @@ func (a *App) apiGet(path string) ([]byte, error) {
 
 func (a *App) apiPost(path string, body interface{}) ([]byte, error) {
 	resp, err := a.apiRequest(http.MethodPost, path, body)
+	if err != nil {
+		return nil, err
+	}
+	return a.apiReadBody(resp)
+}
+
+func (a *App) apiPut(path string, body interface{}) ([]byte, error) {
+	resp, err := a.apiRequest(http.MethodPut, path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -520,7 +541,56 @@ type DownloadItem struct {
 	AvgSpeed    float64 `json:"avg_speed"`
 }
 
-// ListDownloads returns all active downloads
+// BackendStatus describes the local Surge engine that the desktop shell uses.
+type BackendStatus struct {
+	Running       bool   `json:"running"`
+	BaseURL       string `json:"base_url"`
+	BinaryPath    string `json:"binary_path"`
+	CLIVersion    string `json:"cli_version"`
+	TokenDetected bool   `json:"token_detected"`
+	SpawnedByApp  bool   `json:"spawned_by_app"`
+	Message       string `json:"message"`
+}
+
+// BulkActionResult summarizes best-effort actions across multiple downloads.
+type BulkActionResult struct {
+	Attempted int      `json:"attempted"`
+	Succeeded int      `json:"succeeded"`
+	Errors    []string `json:"errors"`
+}
+
+func normalizeDownloadStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "pending":
+		return downloadStatusQueued
+	case "download_progress", "active":
+		return downloadStatusDownloading
+	case "complete", "done", "finished", "success":
+		return downloadStatusCompleted
+	case "failed", "errored":
+		return downloadStatusError
+	case "pausing":
+		return downloadStatusPaused
+	default:
+		return strings.ToLower(strings.TrimSpace(status))
+	}
+}
+
+func normalizeDownloadItem(item DownloadItem) DownloadItem {
+	item.Status = normalizeDownloadStatus(item.Status)
+	if item.Progress < 0 {
+		item.Progress = 0
+	}
+	if item.Progress > 100 {
+		item.Progress = 100
+	}
+	if item.Status == downloadStatusCompleted && item.Progress == 0 {
+		item.Progress = 100
+	}
+	return item
+}
+
+// ListDownloads returns all known downloads.
 func (a *App) ListDownloads() ([]DownloadItem, error) {
 	data, err := a.apiGet("/list")
 	if err != nil {
@@ -529,6 +599,12 @@ func (a *App) ListDownloads() ([]DownloadItem, error) {
 	var items []DownloadItem
 	if err := json.Unmarshal(data, &items); err != nil {
 		return nil, err
+	}
+	if items == nil {
+		return []DownloadItem{}, nil
+	}
+	for i := range items {
+		items[i] = normalizeDownloadItem(items[i])
 	}
 	return items, nil
 }
@@ -623,10 +699,61 @@ func (a *App) resolveDownloadFilename(downloadURL string) string {
 	return resolveFilenameFromHeader(resp)
 }
 
-func (a *App) AddDownload(downloadURL, destPath, filename string) (string, error) {
+func validateDownloadURL(downloadURL string) error {
+	trimmed := strings.TrimSpace(downloadURL)
+	if trimmed == "" {
+		return fmt.Errorf("download URL is required")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("download URL must be absolute")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("download URL must use http or https")
+	}
+	return nil
+}
+
+func parseMirrorURLs(raw string) ([]string, error) {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == ','
+	})
+	mirrors := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		mirror := strings.TrimSpace(part)
+		if mirror == "" {
+			continue
+		}
+		if err := validateDownloadURL(mirror); err != nil {
+			return nil, fmt.Errorf("invalid mirror %q: %w", mirror, err)
+		}
+		if _, ok := seen[mirror]; ok {
+			continue
+		}
+		seen[mirror] = struct{}{}
+		mirrors = append(mirrors, mirror)
+	}
+	return mirrors, nil
+}
+
+func (a *App) AddDownload(downloadURL, destPath, filename, mirrorsRaw string) (string, error) {
+	downloadURL = strings.TrimSpace(downloadURL)
+	if err := validateDownloadURL(downloadURL); err != nil {
+		return "", err
+	}
 	body := map[string]interface{}{
-		"url":  downloadURL,
-		"path": destPath,
+		"url": downloadURL,
+	}
+	mirrors, err := parseMirrorURLs(mirrorsRaw)
+	if err != nil {
+		return "", err
+	}
+	if len(mirrors) > 0 {
+		body["mirrors"] = mirrors
+	}
+	if trimmedPath := strings.TrimSpace(destPath); trimmedPath != "" {
+		body["path"] = trimmedPath
 	}
 	trimmedFilename := strings.TrimSpace(filename)
 	if isValidDownloadFilename(trimmedFilename) {
@@ -678,13 +805,13 @@ func (a *App) resumeDuplicate(downloadURL string) (string, error) {
 		if item.URL != downloadURL {
 			continue
 		}
-		if item.Status == downloadStatusCompleted || item.Status == downloadStatusDone {
+		if normalizeDownloadStatus(item.Status) == downloadStatusCompleted {
 			continue
 		}
 		if item.ID == "" {
 			continue
 		}
-		if item.Status == downloadStatusPaused {
+		if normalizeDownloadStatus(item.Status) == downloadStatusPaused {
 			_ = a.ResumeDownload(item.ID)
 		}
 		return item.ID, nil
@@ -694,7 +821,7 @@ func (a *App) resumeDuplicate(downloadURL string) (string, error) {
 
 // AddURL is a simpler binding: just provide a URL
 func (a *App) AddURL(url string) (string, error) {
-	return a.AddDownload(url, "", "")
+	return a.AddDownload(url, "", "", "")
 }
 
 func withDownloadID(path, id string) string {
@@ -720,7 +847,72 @@ func (a *App) DeleteDownload(id string) error {
 		return err
 	}
 	_, err = a.apiReadBody(resp)
+	if err == nil {
+		return nil
+	}
+	if !strings.Contains(err.Error(), "405") {
+		return err
+	}
+	_, postErr := a.apiPost(withDownloadID("/delete", id), nil)
+	return postErr
+}
+
+// UpdateDownloadURL updates a paused or errored download to a replacement URL.
+func (a *App) UpdateDownloadURL(id, newURL string) error {
+	newURL = strings.TrimSpace(newURL)
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("download id is required")
+	}
+	if err := validateDownloadURL(newURL); err != nil {
+		return err
+	}
+	_, err := a.apiPut(withDownloadID("/update-url", id), map[string]string{"url": newURL})
 	return err
+}
+
+func (a *App) bulkAction(match func(DownloadItem) bool, action func(string) error) (BulkActionResult, error) {
+	items, err := a.ListDownloads()
+	if err != nil {
+		return BulkActionResult{}, err
+	}
+	result := BulkActionResult{Errors: []string{}}
+	for _, item := range items {
+		if item.ID == "" || !match(item) {
+			continue
+		}
+		result.Attempted++
+		if err := action(item.ID); err != nil {
+			name := item.Filename
+			if name == "" {
+				name = item.ID
+			}
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", name, err))
+			continue
+		}
+		result.Succeeded++
+	}
+	return result, nil
+}
+
+// PauseAll pauses all active downloads.
+func (a *App) PauseAll() (BulkActionResult, error) {
+	return a.bulkAction(func(item DownloadItem) bool {
+		return normalizeDownloadStatus(item.Status) == downloadStatusDownloading
+	}, a.PauseDownload)
+}
+
+// ResumeAll resumes all paused downloads.
+func (a *App) ResumeAll() (BulkActionResult, error) {
+	return a.bulkAction(func(item DownloadItem) bool {
+		return normalizeDownloadStatus(item.Status) == downloadStatusPaused
+	}, a.ResumeDownload)
+}
+
+// ClearCompleted removes completed downloads from the list/history exposed by Surge.
+func (a *App) ClearCompleted() (BulkActionResult, error) {
+	return a.bulkAction(func(item DownloadItem) bool {
+		return normalizeDownloadStatus(item.Status) == downloadStatusCompleted
+	}, a.DeleteDownload)
 }
 
 // GetDownloadStatus returns the status of a single download
@@ -733,6 +925,7 @@ func (a *App) GetDownloadStatus(id string) (*DownloadItem, error) {
 	if err := json.Unmarshal(data, &item); err != nil {
 		return nil, err
 	}
+	item = normalizeDownloadItem(item)
 	return &item, nil
 }
 
@@ -770,6 +963,47 @@ func (a *App) OpenInFinder(filePath string) error {
 		return fmt.Errorf("empty file path")
 	}
 	return exec.Command("open", "-R", filePath).Start()
+}
+
+func (a *App) cliVersion() string {
+	a.cliVersionOnce.Do(func() {
+		if a.surgeBin == "" {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		out, err := exec.CommandContext(ctx, a.surgeBin, "--version").Output()
+		if err != nil {
+			return
+		}
+		a.cliVersionCache = strings.TrimSpace(string(out))
+	})
+	return a.cliVersionCache
+}
+
+// GetBackendStatus returns desktop-visible Surge backend compatibility state.
+func (a *App) GetBackendStatus() BackendStatus {
+	running := a.healthCheck()
+	status := BackendStatus{
+		Running:       running,
+		BaseURL:       surgeBaseURL,
+		BinaryPath:    a.surgeBin,
+		CLIVersion:    a.cliVersion(),
+		TokenDetected: a.token != "",
+		SpawnedByApp:  a.surgeProcess != nil,
+	}
+	switch {
+	case a.surgeBin == "":
+		status.Message = "Surge CLI not found. Install Surge or set SURGE_BIN."
+	case !running:
+		status.Message = "Surge backend is offline."
+	case !status.TokenDetected:
+		status.Message = "Surge backend is running, but no API token was detected."
+	default:
+		status.Message = "Surge backend is ready."
+	}
+	return status
 }
 
 // IsServerRunning checks if the backend is alive

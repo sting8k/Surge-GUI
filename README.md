@@ -1,12 +1,28 @@
 # Surge Desktop
 
-A fast, minimal download manager built with [Wails](https://wails.io/) + Svelte + Go.
+An early-stage Surge desktop client built with [Wails](https://wails.io/) +
+Svelte + Go.
 
 ![macOS](https://img.shields.io/badge/macOS-supported-brightgreen)
 
 ![Surge Screenshot](build/screenshot.png)
 
-## Features
+## Project Status
+
+This project is not yet a professional or feature-complete download manager.
+
+Known gaps:
+
+- Surge backend compatibility needs to be verified against the latest supported
+  upstream version.
+- Core download-manager workflows still need clearer queue, retry, failure,
+  history, and recovery behavior.
+- Validation and release proof are not complete yet.
+
+See `docs/product/overview.md` and `docs/product/roadmap.md` for the current
+product direction.
+
+## Current Features
 
 - **Download management** — add URLs, pause, resume, delete downloads
 - **Real-time progress** — SSE event streaming with live speed & ETA
@@ -22,7 +38,9 @@ A fast, minimal download manager built with [Wails](https://wails.io/) + Svelte 
 - [Go 1.21+](https://go.dev/)
 - [Node.js 18+](https://nodejs.org/)
 - [Wails CLI v2](https://wails.io/docs/gettingstarted/installation)
-- [Surge CLI](https://github.com/surge-downloader/surge) running as backend server
+- [Surge CLI](https://github.com/surge-downloader/surge) running as backend
+  server. Compatibility with the latest upstream version still needs
+  verification.
 
 ### Development
 
@@ -42,7 +60,7 @@ Produces `build/bin/Surge.app` (macOS).
 
 ## Project Structure
 
-```
+```text
 surge-wails/
 ├── app.go                  # Backend: download API, SSE, autostart, icon mode
 ├── main.go                 # Wails app entry point & config

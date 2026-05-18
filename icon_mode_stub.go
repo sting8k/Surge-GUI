@@ -13,3 +13,5 @@ func applyIconMode(mode string) error {
 	}
 	return fmt.Errorf("unsupported icon mode: %s", mode)
 }
+
+func revealMainWindow() {}

@@ -6,6 +6,7 @@ package main
 #cgo CFLAGS: -x objective-c -fobjc-arc
 #cgo LDFLAGS: -framework Cocoa
 #import <Cocoa/Cocoa.h>
+#import <dispatch/dispatch.h>
 
 static NSStatusItem *surgeStatusItem = nil;
 static NSImage *surgeTemplateIcon = nil;
@@ -16,20 +17,47 @@ static NSMenu *surgeStatusMenu = nil;
 - (void)quitApp:(id)sender;
 @end
 
-@implementation SurgeStatusItemHandler
-- (void)openApp:(id)sender {
+static NSWindow *surge_main_window(void) {
+    NSWindow *window = [NSApp keyWindow];
+    if (window != nil && [window canBecomeKeyWindow]) {
+        return window;
+    }
+
+    for (NSWindow *candidate in [NSApp windows]) {
+        if ([candidate canBecomeKeyWindow]) {
+            return candidate;
+        }
+    }
+
+    return nil;
+}
+
+static void surge_reveal_main_window_on_main(void *context);
+
+static void surge_reveal_main_window(void) {
     if ([NSApp isHidden]) {
         [NSApp unhide:nil];
     }
-    [NSApp activateIgnoringOtherApps:YES];
 
-    NSWindow *window = [NSApp keyWindow];
-    if (window == nil && [[NSApp windows] count] > 0) {
-        window = [[NSApp windows] objectAtIndex:0];
-    }
+    NSWindow *window = surge_main_window();
     if (window != nil) {
+        if ([window isMiniaturized]) {
+            [window deminiaturize:nil];
+        }
         [window makeKeyAndOrderFront:nil];
+        [window orderFrontRegardless];
     }
+
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+static void surge_reveal_main_window_on_main(void *context) {
+    surge_reveal_main_window();
+}
+
+@implementation SurgeStatusItemHandler
+- (void)openApp:(id)sender {
+    surge_reveal_main_window();
 }
 
 - (void)quitApp:(id)sender {
@@ -121,12 +149,13 @@ static SurgeStatusItemHandler *surgeStatusHandler = nil;
 + (void)enableDockMode {
     [self removeStatusItem];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-    [NSApp activateIgnoringOtherApps:YES];
+    surge_reveal_main_window();
 }
 
 + (void)enableMenuBarMode {
     [self ensureStatusItem];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    surge_reveal_main_window();
 }
 @end
 
@@ -136,6 +165,14 @@ static void surge_set_icon_mode(int mode) {
         return;
     }
     [SurgeIconModeController performSelectorOnMainThread:@selector(enableDockMode) withObject:nil waitUntilDone:YES];
+}
+
+static void surge_show_main_window(void) {
+    if ([NSThread isMainThread]) {
+        surge_reveal_main_window();
+        return;
+    }
+    dispatch_sync_f(dispatch_get_main_queue(), NULL, surge_reveal_main_window_on_main);
 }
 */
 import "C"
@@ -153,4 +190,8 @@ func applyIconMode(mode string) error {
 	default:
 		return fmt.Errorf("unsupported icon mode: %s", mode)
 	}
+}
+
+func revealMainWindow() {
+	C.surge_show_main_window()
 }

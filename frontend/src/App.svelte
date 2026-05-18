@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { ListDownloads, AddURL, AddDownload, PauseDownload, ResumeDownload, DeleteDownload, IsServerRunning, OpenDirectoryDialog, GetStartupEnabled, SetStartupEnabled, GetIconMode, SetIconMode, GetVersion, OpenFile, OpenInFinder } from '../wailsjs/go/main/App';
+  import { ListDownloads, AddURL, AddDownload, PauseDownload, ResumeDownload, DeleteDownload, GetBackendStatus, OpenDirectoryDialog, GetStartupEnabled, SetStartupEnabled, GetIconMode, SetIconMode, GetVersion, OpenFile, OpenInFinder, UpdateDownloadURL, PauseAll, ResumeAll, ClearCompleted } from '../wailsjs/go/main/App';
   import { EventsOn } from '../wailsjs/runtime/runtime';
   import type { main } from '../wailsjs/go/models';
 
@@ -8,6 +8,8 @@
   let downloads: main.DownloadItem[] = [];
   let urlInput = '';
   let serverConnected = false;
+  let backendStatus: main.BackendStatus | null = null;
+  let backendMessage = 'checking engine...';
   let totalSpeed = 0;
   let selectedId: string | null = null;
   let activeTab = 1; // 0=Queued, 1=Active, 2=Done
@@ -16,12 +18,19 @@
   let iconMode: 'dock' | 'menu_bar' = 'dock';
   let iconModeBusy = false;
   let appVersion = 'dev';
+  let bulkBusy = false;
 
   // Modal
   let showAddModal = false;
   let modalURL = '';
   let modalPath = '';
   let modalFilename = '';
+  let modalMirrors = '';
+
+  // Recovery modal
+  let showUpdateUrlModal = false;
+  let updateUrlId = '';
+  let updateUrlValue = '';
 
   // Toasts
   let toasts: Array<{id: number; message: string; type: string}> = [];
@@ -84,32 +93,33 @@
         e.preventDefault();
       }
     });
-    const [connected] = await Promise.all([
-      IsServerRunning(),
+    await Promise.all([
+      refreshBackendStatus(),
       refreshStartupState(),
       refreshIconMode(),
       refreshList()
     ]);
-    serverConnected = connected;
     try { appVersion = await GetVersion(); } catch {}
 
     pollInterval = setInterval(async () => {
-      const [connectedNow] = await Promise.all([
-        IsServerRunning(),
+      await Promise.all([
+        refreshBackendStatus(),
         refreshList()
       ]);
-      serverConnected = connectedNow;
     }, 4000);
 
     cleanups.push(EventsOn('surge:progress', (data: any) => updateProgress(data)));
+    cleanups.push(EventsOn('surge:download_progress', (data: any) => updateProgress(data)));
     cleanups.push(EventsOn('surge:started', (data: any) => {
       toast(`⬇ ${data.Filename || data.filename || 'download'}`, 'info');
       scheduleRefreshList();
     }));
-    cleanups.push(EventsOn('surge:complete', (data: any) => {
-      toast(`✔ ${data.Filename || data.filename}`, 'success');
+    const onComplete = (data: any) => {
+      toast(`✔ ${data.Filename || data.filename || 'download'}`, 'success');
       scheduleRefreshList();
-    }));
+    };
+    cleanups.push(EventsOn('surge:complete', onComplete));
+    cleanups.push(EventsOn('surge:download_complete', onComplete));
     cleanups.push(EventsOn('surge:error', (data: any) => {
       toast(`✖ ${data.Filename || data.filename}`, 'error');
       scheduleRefreshList();
@@ -132,6 +142,18 @@
   });
 
   // ── Data ──
+  async function refreshBackendStatus() {
+    try {
+      backendStatus = await GetBackendStatus();
+      serverConnected = !!backendStatus?.running;
+      backendMessage = backendStatus?.message || (serverConnected ? 'Surge backend is ready.' : 'Surge backend is offline.');
+    } catch (e: any) {
+      backendStatus = null;
+      serverConnected = false;
+      backendMessage = `Surge backend status failed: ${e}`;
+    }
+  }
+
   async function refreshList() {
     try {
       const list = await ListDownloads();
@@ -175,7 +197,14 @@
   }
 
   // ── Filtering by tab ──
-  function statusKey(s: string): string { return s === 'pausing' ? 'paused' : (s || 'queued'); }
+  function statusKey(s: string): string {
+    const k = (s || 'queued').toLowerCase().trim();
+    if (!k || k === 'pending') return 'queued';
+    if (k === 'pausing') return 'paused';
+    if (k === 'failed' || k === 'errored') return 'error';
+    if (k === 'done' || k === 'complete' || k === 'finished' || k === 'success') return 'completed';
+    return k;
+  }
 
   function filterByTab(items: main.DownloadItem[], tab: number): main.DownloadItem[] {
     return items.filter(d => {
@@ -190,6 +219,7 @@
   async function quickAdd() {
     const url = urlInput.trim();
     if (!url) return;
+    if (!serverConnected) { toast(backendMessage || 'engine offline', 'error'); return; }
     try {
       await AddURL(url);
       urlInput = '';
@@ -204,10 +234,11 @@
 
   async function submitAdd() {
     if (!modalURL.trim()) return;
+    if (!serverConnected) { toast(backendMessage || 'engine offline', 'error'); return; }
     try {
-      await AddDownload(modalURL.trim(), modalPath, modalFilename);
+      await AddDownload(modalURL.trim(), modalPath, modalFilename, modalMirrors);
       showAddModal = false;
-      modalURL = modalPath = modalFilename = '';
+      modalURL = modalPath = modalFilename = modalMirrors = '';
       toast('queued', 'info');
       scheduleRefreshList(500);
     } catch (e: any) {
@@ -226,7 +257,42 @@
       await DeleteDownload(id);
       if (selectedId === id) selectedId = null;
       scheduleRefreshList();
-    } catch {}
+    } catch (e: any) { toast(`delete failed: ${e}`, 'error'); }
+  }
+
+  function openUpdateURL(dl: main.DownloadItem) {
+    updateUrlId = dl.id;
+    updateUrlValue = dl.url || '';
+    showUpdateUrlModal = true;
+  }
+
+  async function submitUpdateURL() {
+    if (!updateUrlId || !updateUrlValue.trim()) return;
+    try {
+      await UpdateDownloadURL(updateUrlId, updateUrlValue.trim());
+      await ResumeDownload(updateUrlId);
+      showUpdateUrlModal = false;
+      updateUrlId = '';
+      updateUrlValue = '';
+      toast('url updated and resumed', 'success');
+      scheduleRefreshList(500);
+    } catch (e: any) {
+      toast(`update failed: ${e}`, 'error');
+    }
+  }
+
+  async function runBulk(label: string, action: () => Promise<main.BulkActionResult>) {
+    if (bulkBusy) return;
+    bulkBusy = true;
+    try {
+      const result = await action();
+      toast(`${label}: ${result.succeeded}/${result.attempted}`, result.errors?.length ? 'error' : 'success');
+      scheduleRefreshList(500);
+    } catch (e: any) {
+      toast(`${label} failed: ${e}`, 'error');
+    } finally {
+      bulkBusy = false;
+    }
   }
 
   async function refreshStartupState() {
@@ -355,11 +421,18 @@
   <div class="input-bar">
     <div class="input-wrap">
       <span class="prefix">$</span>
-      <input type="text" placeholder="paste url" bind:value={urlInput} on:keydown={onKey} id="url-input" />
+      <input type="text" placeholder={serverConnected ? 'paste url' : 'engine offline'} bind:value={urlInput} on:keydown={onKey} id="url-input" disabled={!serverConnected} />
     </div>
-    <button class="btn btn-accent" on:click={quickAdd} id="btn-add">Add</button>
-    <button class="btn" on:click={() => showAddModal = true} id="btn-advanced" title="Advanced">⋯</button>
+    <button class="btn btn-accent" on:click={quickAdd} id="btn-add" disabled={!serverConnected}>Add</button>
+    <button class="btn" on:click={() => showAddModal = true} id="btn-advanced" title="Advanced" disabled={!serverConnected}>⋯</button>
   </div>
+
+  {#if !serverConnected}
+    <div class="engine-banner">
+      <strong>Engine offline.</strong> {backendMessage}
+      {#if backendStatus?.cli_version}<span>CLI: {backendStatus.cli_version}</span>{/if}
+    </div>
+  {/if}
 
   <!-- DASHBOARD: 2-column -->
   <div class="dashboard">
@@ -418,8 +491,10 @@
               <div class="acts">
                 {#if sk === 'downloading'}
                   <button class="btn-icon" on:click|stopPropagation={() => doPause(dl.id)} title="Pause">⏸</button>
-                {:else if sk === 'paused' || sk === 'error'}
+                {:else if sk === 'paused'}
                   <button class="btn-icon" on:click|stopPropagation={() => doResume(dl.id)} title="Resume">▶</button>
+                {:else if sk === 'error'}
+                  <button class="btn-icon" on:click|stopPropagation={() => openUpdateURL(dl)} title="Update URL and retry">↻</button>
                 {/if}
                 <button class="btn-icon" on:click|stopPropagation={() => doDelete(dl.id)} title="Delete" style="color: var(--st-error)">✕</button>
               </div>
@@ -527,8 +602,10 @@
           <div class="detail-actions">
             {#if sk === 'downloading'}
               <button class="btn btn-pause" on:click={() => doPause(selected.id)}>⏸ Pause</button>
-            {:else if sk === 'paused' || sk === 'error'}
+            {:else if sk === 'paused'}
               <button class="btn btn-resume" on:click={() => doResume(selected.id)}>▶ Resume</button>
+            {:else if sk === 'error'}
+              <button class="btn btn-resume" on:click={() => openUpdateURL(selected)}>↻ Update URL</button>
             {/if}
             <button class="btn btn-delete" on:click={() => doDelete(selected.id)}>✕ Delete</button>
           </div>
@@ -556,6 +633,11 @@
             <span class="value purple">{sz(totalDownloaded)}</span>
           </div>
         </div>
+        <div class="bulk-actions">
+          <button class="btn" disabled={bulkBusy || activeCount === 0} on:click={() => runBulk('pause all', PauseAll)}>pause all</button>
+          <button class="btn" disabled={bulkBusy || activeCount === 0} on:click={() => runBulk('resume all', ResumeAll)}>resume all</button>
+          <button class="btn" disabled={bulkBusy || doneCount === 0} on:click={() => runBulk('clear done', ClearCompleted)}>clear done</button>
+        </div>
       </div>
     </div>
   </div>
@@ -566,7 +648,8 @@
       <span class:connected={serverConnected} class:disconnected={!serverConnected}>
         {serverConnected ? '● connected' : '○ offline'}
       </span>
-      <span>:1700</span>
+      <span>{backendStatus?.base_url || ':1700'}</span>
+      {#if backendStatus?.cli_version}<span>{backendStatus.cli_version}</span>{/if}
     </div>
     <div class="right">
       <div class="mode-switch" role="group" aria-label="icon mode">
@@ -621,6 +704,24 @@
   </div>
 {/if}
 
+<!-- UPDATE URL MODAL -->
+{#if showUpdateUrlModal}
+  <div class="modal-bg" on:click|self={() => showUpdateUrlModal = false} on:keydown={(e) => e.key === 'Escape' && (showUpdateUrlModal = false)}>
+    <div class="modal-box">
+      <h2>Update URL</h2>
+      <p class="modal-help">Use this for failed or expired download links. The replacement URL must point to the same file.</p>
+      <div class="form-group">
+        <label class="form-label" for="update-url">new url</label>
+        <input class="form-input" id="update-url" type="text" placeholder="https://..." bind:value={updateUrlValue} on:keydown={(e) => e.key === 'Enter' && submitUpdateURL()} />
+      </div>
+      <div class="modal-actions">
+        <button class="btn" on:click={() => showUpdateUrlModal = false}>cancel</button>
+        <button class="btn btn-accent" on:click={submitUpdateURL}>update & resume</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <!-- ADD MODAL -->
 {#if showAddModal}
   <div class="modal-bg" on:click|self={() => showAddModal = false} on:keydown={(e) => e.key === 'Escape' && (showAddModal = false)}>
@@ -640,6 +741,10 @@
           <input class="form-input" id="modal-path" type="text" placeholder="default" bind:value={modalPath} />
           <button class="btn" on:click={browseDir}>browse</button>
         </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="modal-mirrors">mirrors</label>
+        <textarea class="form-input form-textarea" id="modal-mirrors" placeholder="one mirror URL per line" bind:value={modalMirrors}></textarea>
       </div>
       <div class="modal-actions">
         <button class="btn" on:click={() => showAddModal = false}>cancel</button>
